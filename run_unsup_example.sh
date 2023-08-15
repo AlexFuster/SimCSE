@@ -11,12 +11,12 @@
 
 python train.py \
     --model_name_or_path bert-base-uncased \
-    --train_file data/wiki1m_for_simcse.txt \
+    --train_file data/wiki_aug.csv \
     --output_dir result/baseline \
     --num_train_epochs 1 \
     --per_device_train_batch_size 64 \
     --learning_rate 3e-5 \
-    --max_seq_length 32 \
+    --max_seq_length 64 \
     --evaluation_strategy steps \
     --metric_for_best_model stsb_spearman \
     --load_best_model_at_end \

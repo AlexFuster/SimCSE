@@ -471,13 +471,23 @@ def main():
                 aug_ids=sent_features_aug['input_ids'][i]
                 soft_neg_ids=sent_features_neg['input_ids'][i]
                 possible_choices=[]
+                possible_choices_tokens=[]
                 ori_tokens=tokenizer.convert_ids_to_tokens(ori_ids)
                 for j in range(len(ori_ids)):
                     token_j=ori_tokens[j]
                     id_j=ori_ids[j]
-                    if not token_j.startswith('##') and token_j not in STOPWORDS and id_j in aug_ids:
+                    if len(token_j)>1 and not token_j.startswith('[') and not token_j.startswith('##') and token_j not in STOPWORDS and id_j in aug_ids:
                         possible_choices.append(j)
+                        possible_choices_tokens.append(token_j)
+                
+                #print(examples[sent0_cname][i])
+                #print(examples[sent1_cname][i])
+                #print(possible_choices_tokens)
+                
+                if len(possible_choices)<2:
+                    continue
                 indexes_to_mask=random.sample(possible_choices,k=2)
+                assert indexes_to_mask[0]!=indexes_to_mask[1]
 
                 ori_id_to_mask=ori_ids[indexes_to_mask[0]]
                 aug_index_to_mask=aug_ids.index(ori_id_to_mask)
@@ -488,6 +498,11 @@ def main():
                 soft_neg_ids[indexes_to_mask[1]]=tokenizer.mask_token_id
                 for key in features.keys():
                     features[key].append([sent_features_ori[key][i],sent_features_aug[key][i],sent_features_neg[key][i]])
+
+                #print(tokenizer.convert_ids_to_tokens(sent_features_ori['input_ids'][i]))
+                #print(tokenizer.convert_ids_to_tokens(sent_features_aug['input_ids'][i]))
+                #print(tokenizer.convert_ids_to_tokens(sent_features_neg['input_ids'][i]))
+                #sys.exit(0)
         return features
 
     if training_args.do_train:
@@ -498,6 +513,13 @@ def main():
             remove_columns=column_names,
             load_from_cache_file=not data_args.overwrite_cache,
         )
+        #ori_len=len(train_dataset)
+        #print(train_dataset[130])
+        #train_dataset=train_dataset.filter(lambda x: x is not None)
+        #new_len=len(train_dataset)
+        #print(f'{ori_len-new_len} samples lost')
+
+
 
     # Data collator
     @dataclass
