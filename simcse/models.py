@@ -201,6 +201,7 @@ def cl_forward(cls,
     loss_fct = nn.CrossEntropyLoss()
 
     # Calculate loss with hard negatives
+    """
     if num_sent == 3:
         # Note that weights are actually logits of weights
         z3_weight = cls.model_args.hard_negative_weight
@@ -208,6 +209,7 @@ def cl_forward(cls,
             [[0.0] * (cos_sim.size(-1) - z1_z3_cos.size(-1)) + [0.0] * i + [z3_weight] + [0.0] * (z1_z3_cos.size(-1) - i - 1) for i in range(z1_z3_cos.size(-1))]
         ).to(cls.device)
         cos_sim = cos_sim + weights
+    """
 
     loss = loss_fct(cos_sim, labels)
 

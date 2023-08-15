@@ -1,13 +1,14 @@
 import logging
 import math
 import os
+import copy
 import sys
 from dataclasses import dataclass, field
 from typing import Optional, Union, List, Dict, Tuple
 import torch
 import collections
 import random
-
+from nltk.corpus import stopwords
 from datasets import load_dataset
 
 import transformers
@@ -40,6 +41,7 @@ from simcse.trainers import CLTrainer
 logger = logging.getLogger(__name__)
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_MASKED_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
+STOPWORDS=stopwords.words('english')
 
 @dataclass
 class ModelArguments:
@@ -347,6 +349,11 @@ def main():
             "You can do it from another script, save it, and load it from here, using --tokenizer_name."
         )
 
+    mode='ours'
+    if mode=='ours':
+        config.attention_probs_dropout_prob=0
+        config.hidden_dropout_prob=0
+    
     if model_args.model_name_or_path:
         if 'roberta' in model_args.model_name_or_path:
             model = RobertaForCL.from_pretrained(
@@ -416,30 +423,71 @@ def main():
             if examples[sent1_cname][idx] is None:
                 examples[sent1_cname][idx] = " "
         
-        sentences = examples[sent0_cname] + examples[sent1_cname]
+        if mode=='ori':
+            sentences = examples[sent0_cname] + examples[sent1_cname]
 
-        # If hard negative exists
-        if sent2_cname is not None:
-            for idx in range(total):
-                if examples[sent2_cname][idx] is None:
-                    examples[sent2_cname][idx] = " "
-            sentences += examples[sent2_cname]
+            # If hard negative exists
+            if sent2_cname is not None:
+                for idx in range(total):
+                    if examples[sent2_cname][idx] is None:
+                        examples[sent2_cname][idx] = " "
+                sentences += examples[sent2_cname]
 
-        sent_features = tokenizer(
-            sentences,
-            max_length=data_args.max_seq_length,
-            truncation=True,
-            padding="max_length" if data_args.pad_to_max_length else False,
-        )
+            sent_features = tokenizer(
+                sentences,
+                max_length=data_args.max_seq_length,
+                truncation=True,
+                padding="max_length" if data_args.pad_to_max_length else False,
+            )
 
-        features = {}
-        if sent2_cname is not None:
-            for key in sent_features:
-                features[key] = [[sent_features[key][i], sent_features[key][i+total], sent_features[key][i+total*2]] for i in range(total)]
-        else:
-            for key in sent_features:
-                features[key] = [[sent_features[key][i], sent_features[key][i+total]] for i in range(total)]
+            features = {}
+            if sent2_cname is not None:
+                for key in sent_features:
+                    features[key] = [[sent_features[key][i], sent_features[key][i+total], sent_features[key][i+total*2]] for i in range(total)]
+            else:
+                for key in sent_features:
+                    features[key] = [[sent_features[key][i], sent_features[key][i+total]] for i in range(total)]
             
+        elif mode=='ours':
+            sent_features_ori = tokenizer(
+                examples[sent0_cname],
+                max_length=data_args.max_seq_length,
+                truncation=True,
+                padding="max_length" if data_args.pad_to_max_length else False,
+            )
+
+            sent_features_aug = tokenizer(
+                examples[sent1_cname],
+                max_length=data_args.max_seq_length,
+                truncation=True,
+                padding="max_length" if data_args.pad_to_max_length else False,
+            )
+
+            sent_features_neg=copy.deepcopy(sent_features_ori)
+
+            features={key:[] for key in sent_features_ori.keys()}
+            for i in range(total):
+                ori_ids=sent_features_ori['input_ids'][i]
+                aug_ids=sent_features_aug['input_ids'][i]
+                soft_neg_ids=sent_features_neg['input_ids'][i]
+                possible_choices=[]
+                ori_tokens=tokenizer.convert_ids_to_tokens(ori_ids)
+                for j in range(len(ori_ids)):
+                    token_j=ori_tokens[j]
+                    id_j=ori_ids[j]
+                    if not token_j.startswith('##') and token_j not in STOPWORDS and id_j in aug_ids:
+                        possible_choices.append(j)
+                indexes_to_mask=random.sample(possible_choices,k=2)
+
+                ori_id_to_mask=ori_ids[indexes_to_mask[0]]
+                aug_index_to_mask=aug_ids.index(ori_id_to_mask)
+                aug_ids[aug_index_to_mask]=tokenizer.mask_token_id
+
+                ori_ids[indexes_to_mask[0]]=tokenizer.mask_token_id
+                
+                soft_neg_ids[indexes_to_mask[1]]=tokenizer.mask_token_id
+                for key in features.keys():
+                    features[key].append([sent_features_ori[key][i],sent_features_aug[key][i],sent_features_neg[key][i]])
         return features
 
     if training_args.do_train:
