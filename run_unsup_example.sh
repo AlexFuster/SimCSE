@@ -15,7 +15,7 @@ python train.py \
     --output_dir result/baseline \
     --num_train_epochs 1 \
     --per_device_train_batch_size 64 \
-    --learning_rate 3e-5 \
+    --learning_rate 1e-5 \
     --max_seq_length 64 \
     --evaluation_strategy steps \
     --metric_for_best_model stsb_spearman \
@@ -28,4 +28,11 @@ python train.py \
     --do_train \
     --do_eval \
     --fp16 \
+    --mode ours \
+    --zero_dropout \
+    --hard_negative_weight 12.0 \
+    --modify_only_neg \
+    --subs_tokens \
     "$@"
+
+#--just_hard_negatives \

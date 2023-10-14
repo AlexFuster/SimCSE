@@ -2,6 +2,7 @@ import logging
 import math
 import os
 import copy
+import json
 import sys
 from dataclasses import dataclass, field
 from typing import Optional, Union, List, Dict, Tuple
@@ -10,6 +11,7 @@ import collections
 import random
 from nltk.corpus import stopwords
 from datasets import load_dataset
+import nltk
 
 import transformers
 from transformers import (
@@ -42,6 +44,37 @@ logger = logging.getLogger(__name__)
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_MASKED_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 STOPWORDS=stopwords.words('english')
+
+def is_eligible_token(token_j):
+    return len(token_j)>1 and not token_j.startswith('[') and not token_j.startswith('##') and token_j not in STOPWORDS
+
+
+def modify_sent(possible_choices,ori_ids,aug_ids,soft_neg_ids,tags_list,categories,mask_token_id,mask,only_neg):
+    def modify_token(ids_list,index_to_mask):
+        if mask:
+            ids_list[index_to_mask]=mask_token_id
+        else:
+            tag_to_mask=tags_list[index_to_mask]
+            old_id=ids_list[index_to_mask]
+            new_id=old_id
+            while new_id==old_id:
+                new_id=random.choice(categories[tag_to_mask])
+            ids_list[index_to_mask]=new_id
+
+    assert mask or only_neg
+    k = 1 if only_neg else 2
+    indexes_to_mask=random.sample(possible_choices,k=k)
+    if only_neg:
+        modify_token(soft_neg_ids,indexes_to_mask[0])
+    else:
+        ori_id_to_mask=ori_ids[indexes_to_mask[0]]
+        aug_index_to_mask=aug_ids.index(ori_id_to_mask)
+        
+        assert indexes_to_mask[0]!=indexes_to_mask[1]
+        modify_token(ori_ids,indexes_to_mask[0])
+        modify_token(soft_neg_ids,indexes_to_mask[1])
+        modify_token(aug_ids,aug_index_to_mask)
+
 
 @dataclass
 class ModelArguments:
@@ -124,7 +157,21 @@ class ModelArguments:
             "help": "Use MLP only during training"
         }
     )
-
+    just_hard_negatives: bool = field(
+        default=False,
+    )
+    mode: str = field(
+        default='ori',
+    )
+    zero_dropout: bool = field(
+        default=False,
+    )
+    subs_tokens: bool = field(
+        default=False,
+    )
+    modify_only_neg: bool = field(
+        default=False,
+    )
 
 @dataclass
 class DataTrainingArguments:
@@ -349,8 +396,10 @@ def main():
             "You can do it from another script, save it, and load it from here, using --tokenizer_name."
         )
 
-    mode='ours'
-    if mode=='ours':
+    with open('model_args.json','w') as f:
+        json.dump(model_args.__dict__,f) 
+
+    if model_args.mode=='ours' or model_args.zero_dropout:
         config.attention_probs_dropout_prob=0
         config.hidden_dropout_prob=0
     
@@ -423,7 +472,7 @@ def main():
             if examples[sent1_cname][idx] is None:
                 examples[sent1_cname][idx] = " "
         
-        if mode=='ori':
+        if model_args.mode=='ori':
             sentences = examples[sent0_cname] + examples[sent1_cname]
 
             # If hard negative exists
@@ -448,7 +497,7 @@ def main():
                 for key in sent_features:
                     features[key] = [[sent_features[key][i], sent_features[key][i+total]] for i in range(total)]
             
-        elif mode=='ours':
+        elif model_args.mode=='ours':
             sent_features_ori = tokenizer(
                 examples[sent0_cname],
                 max_length=data_args.max_seq_length,
@@ -464,6 +513,8 @@ def main():
             )
 
             sent_features_neg=copy.deepcopy(sent_features_ori)
+            with open('categories.json','r'):
+                categories=json.load()
 
             features={key:[] for key in sent_features_ori.keys()}
             for i in range(total):
@@ -473,10 +524,14 @@ def main():
                 possible_choices=[]
                 possible_choices_tokens=[]
                 ori_tokens=tokenizer.convert_ids_to_tokens(ori_ids)
+                if model_args.subs_tokens:
+                    ori_tokens_tag=[tup[1] for tup in nltk.pos_tag(ori_tokens)]
+                else:
+                    ori_tokens_tag=None
                 for j in range(len(ori_ids)):
                     token_j=ori_tokens[j]
                     id_j=ori_ids[j]
-                    if len(token_j)>1 and not token_j.startswith('[') and not token_j.startswith('##') and token_j not in STOPWORDS and id_j in aug_ids:
+                    if is_eligible_token(token_j) and id_j in aug_ids:
                         possible_choices.append(j)
                         possible_choices_tokens.append(token_j)
                 
@@ -486,16 +541,9 @@ def main():
                 
                 if len(possible_choices)<2:
                     continue
-                indexes_to_mask=random.sample(possible_choices,k=2)
-                assert indexes_to_mask[0]!=indexes_to_mask[1]
 
-                ori_id_to_mask=ori_ids[indexes_to_mask[0]]
-                aug_index_to_mask=aug_ids.index(ori_id_to_mask)
-                aug_ids[aug_index_to_mask]=tokenizer.mask_token_id
+                modify_sent(possible_choices,ori_ids,aug_ids,soft_neg_ids,ori_tokens_tag,categories,tokenizer.mask_token_id,not model_args.subs_tokens,model_args.modify_only_neg)
 
-                ori_ids[indexes_to_mask[0]]=tokenizer.mask_token_id
-                
-                soft_neg_ids[indexes_to_mask[1]]=tokenizer.mask_token_id
                 for key in features.keys():
                     features[key].append([sent_features_ori[key][i],sent_features_aug[key][i],sent_features_neg[key][i]])
 

@@ -191,25 +191,33 @@ def cl_forward(cls,
         z1 = torch.cat(z1_list, 0)
         z2 = torch.cat(z2_list, 0)
 
-    cos_sim = cls.sim(z1.unsqueeze(1), z2.unsqueeze(0))
-    # Hard negative
-    if num_sent >= 3:
-        z1_z3_cos = cls.sim(z1.unsqueeze(1), z3.unsqueeze(0))
-        cos_sim = torch.cat([cos_sim, z1_z3_cos], 1)
 
-    labels = torch.arange(cos_sim.size(0)).long().to(cls.device)
     loss_fct = nn.CrossEntropyLoss()
+    
+    if num_sent >= 3 and cls.model_args.just_hard_negatives:
+        cos_sim = cls.sim(z1, z2)
+        z1_z3_cos = cls.sim(z1, z3)
+        cos_sim = torch.stack([cos_sim, z1_z3_cos], 1)
+        labels = torch.zeros(cos_sim.size(0)).long().to(cls.device)
 
-    # Calculate loss with hard negatives
-    """
-    if num_sent == 3:
-        # Note that weights are actually logits of weights
-        z3_weight = cls.model_args.hard_negative_weight
-        weights = torch.tensor(
-            [[0.0] * (cos_sim.size(-1) - z1_z3_cos.size(-1)) + [0.0] * i + [z3_weight] + [0.0] * (z1_z3_cos.size(-1) - i - 1) for i in range(z1_z3_cos.size(-1))]
-        ).to(cls.device)
-        cos_sim = cos_sim + weights
-    """
+    else:
+        cos_sim = cls.sim(z1.unsqueeze(1), z2.unsqueeze(0))
+        # Hard negative
+        if num_sent >= 3:
+            z1_z3_cos = cls.sim(z1.unsqueeze(1), z3.unsqueeze(0))
+            cos_sim = torch.cat([cos_sim, z1_z3_cos], 1)
+
+        labels = torch.arange(cos_sim.size(0)).long().to(cls.device)
+        
+
+        # Calculate loss with hard negatives
+        if num_sent == 3:
+            # Note that weights are actually logits of weights
+            z3_weight = cls.model_args.hard_negative_weight
+            weights = torch.tensor(
+                [[0.0] * (cos_sim.size(-1) - z1_z3_cos.size(-1)) + [0.0] * i + [z3_weight] + [0.0] * (z1_z3_cos.size(-1) - i - 1) for i in range(z1_z3_cos.size(-1))]
+            ).to(cls.device)
+            cos_sim = cos_sim - weights
 
     loss = loss_fct(cos_sim, labels)
 
