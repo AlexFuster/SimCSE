@@ -28,11 +28,9 @@ python train.py \
     --do_train \
     --do_eval \
     --fp16 \
-    --mode ours \
+    --mode subs \
     --zero_dropout \
     --hard_negative_weight 12.0 \
-    --modify_only_neg \
-    --subs_tokens \
     "$@"
 
 #--just_hard_negatives \

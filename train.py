@@ -12,6 +12,7 @@ import random
 from nltk.corpus import stopwords
 from datasets import load_dataset
 import nltk
+from nltk.tokenize.treebank import TreebankWordTokenizer, TreebankWordDetokenizer
 
 import transformers
 from transformers import (
@@ -49,31 +50,22 @@ def is_eligible_token(token_j):
     return len(token_j)>1 and not token_j.startswith('[') and not token_j.startswith('##') and token_j not in STOPWORDS
 
 
-def modify_sent(possible_choices,ori_ids,aug_ids,soft_neg_ids,tags_list,categories,mask_token_id,mask,only_neg):
-    def modify_token(ids_list,index_to_mask):
-        if mask:
-            ids_list[index_to_mask]=mask_token_id
-        else:
-            tag_to_mask=tags_list[index_to_mask]
-            old_id=ids_list[index_to_mask]
-            new_id=old_id
-            while new_id==old_id:
-                new_id=random.choice(categories[tag_to_mask])
-            ids_list[index_to_mask]=new_id
+def mask_sent(possible_choices,ori_ids,aug_ids,soft_neg_ids,mask_token_id,only_neg):
+    def mask_token(ids_list,index_to_mask):
+        ids_list[index_to_mask]=mask_token_id
 
-    assert mask or only_neg
     k = 1 if only_neg else 2
     indexes_to_mask=random.sample(possible_choices,k=k)
     if only_neg:
-        modify_token(soft_neg_ids,indexes_to_mask[0])
+        mask_token(soft_neg_ids,indexes_to_mask[0])
     else:
         ori_id_to_mask=ori_ids[indexes_to_mask[0]]
         aug_index_to_mask=aug_ids.index(ori_id_to_mask)
         
         assert indexes_to_mask[0]!=indexes_to_mask[1]
-        modify_token(ori_ids,indexes_to_mask[0])
-        modify_token(soft_neg_ids,indexes_to_mask[1])
-        modify_token(aug_ids,aug_index_to_mask)
+        mask_token(ori_ids,indexes_to_mask[0])
+        mask_token(soft_neg_ids,indexes_to_mask[1])
+        mask_token(aug_ids,aug_index_to_mask)
 
 
 @dataclass
@@ -164,9 +156,6 @@ class ModelArguments:
         default='ori',
     )
     zero_dropout: bool = field(
-        default=False,
-    )
-    subs_tokens: bool = field(
         default=False,
     )
     modify_only_neg: bool = field(
@@ -399,7 +388,7 @@ def main():
     with open('model_args.json','w') as f:
         json.dump(model_args.__dict__,f) 
 
-    if model_args.mode=='ours' or model_args.zero_dropout:
+    if model_args.mode!='ori' or model_args.zero_dropout:
         config.attention_probs_dropout_prob=0
         config.hidden_dropout_prob=0
     
@@ -456,6 +445,14 @@ def main():
         raise NotImplementedError
 
     def prepare_features(examples):
+        def bert_tokenize(sents):
+            return tokenizer(
+                sents,
+                max_length=data_args.max_seq_length,
+                truncation=True,
+                padding="max_length" if data_args.pad_to_max_length else False,
+            )
+
         # padding = longest (default)
         #   If no sentence in the batch exceed the max length, then use
         #   the max sentence length in the batch, otherwise use the 
@@ -497,24 +494,60 @@ def main():
                 for key in sent_features:
                     features[key] = [[sent_features[key][i], sent_features[key][i+total]] for i in range(total)]
             
+        elif model_args.mode=='subs':
+            valid_tags=['JJ','JJR','JJS','NN','NNS','RB','RBR','RBS','VB','VBG','VBD','VBN','VBP','VBZ']
+            with open('categories.json','r') as f:
+                categories=json.load(f)
+            nltk_tokenizer=TreebankWordTokenizer()
+            nltk_detokenizer=TreebankWordDetokenizer()
+            examples['ori_sent']=[]
+            examples['pos_sent']=[]
+            examples['soft_neg']=[]
+            bad_count=0
+            for i in range(total):
+                tokenized_words=nltk_tokenizer.tokenize(examples[sent0_cname][i])
+                tagged_words=nltk.pos_tag(tokenized_words)
+                possible_choices=[]
+                for j,(w,t) in enumerate(tagged_words):
+                    if j>=data_args.max_seq_length-2:
+                        break
+                    if t in valid_tags and w in categories[t]:
+                        possible_choices.append(j)
+
+                if len(possible_choices)>0:
+                    index_to_sub=random.choice(possible_choices)
+                    old_w,tag_to_sub=tagged_words[index_to_sub]
+                    new_w=''
+                    while new_w == old_w:
+                        new_w=random.choice(categories[tag_to_sub])
+                    tokenized_words[index_to_sub]=new_w
+                    examples['ori_sent'].append(examples[sent0_cname][i])
+                    examples['pos_sent'].append(examples[sent1_cname][i])
+                    examples['soft_neg'].append(nltk_detokenizer.detokenize(tokenized_words))
+                else:
+                    bad_count+=1
+                    #print(examples[sent0_cname][i])
+
+            #print(examples[sent0_cname])
+            examples[sent0_cname]=examples['ori_sent']
+            #print(examples[sent0_cname])
+            examples[sent1_cname]=examples['pos_sent']
+
+            #print(len(examples[sent0_cname]))
+            sent_features_ori = bert_tokenize(examples[sent0_cname])
+            sent_features_aug = bert_tokenize(examples[sent1_cname])
+            sent_features_neg = bert_tokenize(examples['soft_neg'])
+            total=len(examples[sent0_cname])
+
+            features={key:[] for key in sent_features_ori.keys()}
+            for i in range(total):
+                for key in features.keys():
+                    features[key].append([sent_features_ori[key][i],sent_features_aug[key][i],sent_features_neg[key][i]])
+
         elif model_args.mode=='ours':
-            sent_features_ori = tokenizer(
-                examples[sent0_cname],
-                max_length=data_args.max_seq_length,
-                truncation=True,
-                padding="max_length" if data_args.pad_to_max_length else False,
-            )
-
-            sent_features_aug = tokenizer(
-                examples[sent1_cname],
-                max_length=data_args.max_seq_length,
-                truncation=True,
-                padding="max_length" if data_args.pad_to_max_length else False,
-            )
-
+            sent_features_ori = bert_tokenize(examples[sent0_cname])
+            sent_features_aug = bert_tokenize(examples[sent1_cname])
             sent_features_neg=copy.deepcopy(sent_features_ori)
-            with open('categories.json','r'):
-                categories=json.load()
 
             features={key:[] for key in sent_features_ori.keys()}
             for i in range(total):
@@ -524,10 +557,6 @@ def main():
                 possible_choices=[]
                 possible_choices_tokens=[]
                 ori_tokens=tokenizer.convert_ids_to_tokens(ori_ids)
-                if model_args.subs_tokens:
-                    ori_tokens_tag=[tup[1] for tup in nltk.pos_tag(ori_tokens)]
-                else:
-                    ori_tokens_tag=None
                 for j in range(len(ori_ids)):
                     token_j=ori_tokens[j]
                     id_j=ori_ids[j]
@@ -542,7 +571,7 @@ def main():
                 if len(possible_choices)<2:
                     continue
 
-                modify_sent(possible_choices,ori_ids,aug_ids,soft_neg_ids,ori_tokens_tag,categories,tokenizer.mask_token_id,not model_args.subs_tokens,model_args.modify_only_neg)
+                mask_sent(possible_choices,ori_ids,aug_ids,soft_neg_ids,tokenizer.mask_token_id,model_args.modify_only_neg)
 
                 for key in features.keys():
                     features[key].append([sent_features_ori[key][i],sent_features_aug[key][i],sent_features_neg[key][i]])
