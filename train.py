@@ -161,6 +161,12 @@ class ModelArguments:
     modify_only_neg: bool = field(
         default=False,
     )
+    mse_loss: bool = field(
+        default=False,
+    )
+    soft_neg_target_sim: float = field(
+        default=0.8,
+    )
 
 @dataclass
 class DataTrainingArguments:

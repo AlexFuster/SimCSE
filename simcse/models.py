@@ -192,7 +192,10 @@ def cl_forward(cls,
         z2 = torch.cat(z2_list, 0)
 
 
-    loss_fct = nn.CrossEntropyLoss()
+    if cls.model_args.mse_loss:
+        loss_fct = nn.MSELoss()
+    else:
+        loss_fct = nn.CrossEntropyLoss()
     
     if num_sent >= 3 and cls.model_args.just_hard_negatives:
         cos_sim = cls.sim(z1, z2)
@@ -207,7 +210,15 @@ def cl_forward(cls,
             z1_z3_cos = cls.sim(z1.unsqueeze(1), z3.unsqueeze(0))
             cos_sim = torch.cat([cos_sim, z1_z3_cos], 1)
 
-        labels = torch.arange(cos_sim.size(0)).long().to(cls.device)
+        if cls.model_args.mse_loss:
+            batch_size=cos_sim.size(0)
+            labels=torch.eye(batch_size)/cls.model_args.temp
+            if num_sent >= 3:
+                labels=torch.cat([labels,torch.eye(batch_size)*cls.model_args.soft_neg_target_sim/cls.model_args.temp],dim=1)
+            labels=labels.to(cls.device)
+        
+        else:
+            labels = torch.arange(cos_sim.size(0)).long().to(cls.device)
         
 
         # Calculate loss with hard negatives
